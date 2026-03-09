@@ -3,12 +3,23 @@ import { useAgentStore } from '../store/useAgentStore';
 
 export const useAgentSocket = (threadId: string) => {
   const socketRef = useRef<WebSocket | null>(null);
-  const { setConnected, setWaiting, addLog, setTasks } = useAgentStore();
+  const { setConnected, setWaiting, setProcessing, incrementGeneration, addLog, setTasks } = useAgentStore();
 
   useEffect(() => {
-    // Connect to the FastAPI server running on port 8000
-    // Note: GitHub Codespaces forwards this port automatically
-    const wsUrl = `https://psychic-xylophone-pjpqjq9pg9qphv55-8000.app.github.dev/ws/agent/${threadId}`;
+    if (!threadId) return;
+
+    // Grab the URL from env, or default to local
+    const rawUrl = process.env.NEXT_PUBLIC_WEBSOCKET_URL || 'wss://psychic-xylophone-pjpqjq9pg9qphv55-8000.app.github.dev/';
+    
+    // 1. Strip any accidental trailing slashes from the env variable
+    // 2. Strip '/ws/agent' if you accidentally included it in the env variable
+    let cleanBaseUrl = rawUrl.replace(/\/$/, "").replace(/\/ws\/agent$/, "");
+    
+    // Construct the perfect URL
+    const wsUrl = `${cleanBaseUrl}/ws/agent/${threadId}`;
+    
+    console.log("🔌 Attempting WebSocket connection to:", wsUrl);
+
     const ws = new WebSocket(wsUrl);
     socketRef.current = ws;
 
@@ -24,32 +35,31 @@ export const useAgentSocket = (threadId: string) => {
           break;
         case 'waiting_for_user':
           setWaiting(true);
+          setProcessing(false);
           if (data.tasks) setTasks(data.tasks);
           addLog({ type: 'status', content: '⏸️ Agent paused. Awaiting human review.' });
           break;
         case 'run_complete':
           setWaiting(false);
+          setProcessing(false);
           if (data.tasks) setTasks(data.tasks);
           addLog({ type: 'status', content: '✅ Workflow complete!' });
           break;
         case 'error':
+          setProcessing(false);
           addLog({ type: 'status', content: `❌ Error: ${data.message}` });
           break;
       }
     };
 
-    // Cleanup the connection when the component unmounts
-    return () => {
-      ws.close();
-    };
-  }, [threadId, setConnected, setWaiting, addLog, setTasks]);
+    return () => ws.close();
+  }, [threadId, setConnected, setWaiting, setProcessing, addLog, setTasks]);
 
-  // Expose a helper function to send actions back to the AI
   const sendAction = (action: 'start' | 'approve' | 'revise', payload: any = {}) => {
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      setProcessing(true);
+      if (action === 'start') incrementGeneration(); 
       socketRef.current.send(JSON.stringify({ action, ...payload }));
-    } else {
-      console.error("WebSocket is not connected!");
     }
   };
 

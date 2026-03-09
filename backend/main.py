@@ -1,62 +1,83 @@
 import os
-from dotenv import load_dotenv, find_dotenv
+from dotenv import load_dotenv
 
-# 1. Automatically find and load the .env file BEFORE anything else happens
-load_dotenv(find_dotenv())
+# CRITICAL: Load variables BEFORE importing any agent logic
+load_dotenv() 
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 import uvicorn
 import json
-import asyncio
+from contextlib import asynccontextmanager
 
-# Import our compiled LangGraph workflow
-from agent import agent_app
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+# Now this import will work because GROQ_API_KEY is in memory
+from agent import workflow
 
-app = FastAPI(title="Agentic PM Orchestrator API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifecycle manager to handle our persistent database connection pool."""
+    raw_uri = os.environ.get("DATABASE_URL")
+    
+    # Strip query parameters that confuse the psycopg driver
+    db_uri = raw_uri.split('?')[0] if raw_uri else None
+    
+    if not db_uri:
+        print("❌ Error: DATABASE_URL not found in environment.")
+        return
+
+    # FIXED: Add prepare_threshold=None to disable prepared statements for the transaction pooler
+    async with AsyncPostgresSaver.from_conn_string(db_uri) as checkpointer:
+        await checkpointer.setup() 
+        
+        app.state.agent_app = workflow.compile(
+            checkpointer=checkpointer,
+            interrupt_before=["human_review"]
+        )
+        print("✅ Enterprise DB connected. Graph compiled.")
+        yield
+        print("🛑 Closing DB connections.")
+
+app = FastAPI(title="Agentic PM Orchestrator API", lifespan=lifespan)
+
+
 @app.get("/")
-@app.head("/") # Add this line so Codespaces stops complaining!
-async def root():
-    return {"message": "Backend is running!"}
-
 async def health_check():
-    return {"status": "Agent Backend is Online", "endpoint": "/ws/agent/{thread_id}"}
+    return {"status": "Agentic Backend is Online and routing WebSockets."}
 
-
+    
 @app.websocket("/ws/agent/{thread_id}")
 async def agent_websocket(websocket: WebSocket, thread_id: str):
     await websocket.accept()
     
-    # The config dict tells LangGraph which memory thread to use
+    agent_app = websocket.app.state.agent_app
     config = {"configurable": {"thread_id": thread_id}}
     
     try:
         while True:
-            # 1. Wait for a message from the Next.js frontend
             data = await websocket.receive_text()
             payload = json.loads(data)
-            
             action = payload.get("action")
             
             # --- SCENARIO A: Starting a New Project ---
             if action == "start":
                 project_goal = payload.get("goal")
                 
-                # Initialize the state
+                # FIX: Explicitly wipe the old approval status and old tasks 
+                # so the database memory doesn't fast-forward the new run!
                 input_state = {
                     "project_goal": project_goal,
-                    "messages": [("user", f"Create a project plan for: {project_goal}")]
+                    "messages": [("user", f"Create a project plan for: {project_goal}")],
+                    "human_feedback": None,  # Clears the previous "APPROVED"
+                    "tasks": []              # Clears the previous Kanban board
                 }
                 
-                # Stream the execution events
                 async for event in agent_app.astream_events(input_state, config=config, version="v2"):
                     kind = event["event"]
                     name = event["name"]
-                    
-                    if kind == "on_chain_start" and name in ["supervisor", "researcher", "planner"]:
+                    if kind == "on_chain_start" and name in ["supervisor", "memory_retriever", "researcher", "planner", "archiver"]:
                         await websocket.send_json({"type": "status", "agent": name, "message": f"{name} is working..."})
                 
-                # After streaming, check where the graph paused
-                current_state = agent_app.get_state(config)
+                current_state = await agent_app.aget_state(config)
                 
                 if current_state.next and current_state.next[0] == "human_review":
                     await websocket.send_json({
@@ -64,50 +85,38 @@ async def agent_websocket(websocket: WebSocket, thread_id: str):
                         "tasks": current_state.values.get("tasks", [])
                     })
 
-            # --- SCENARIO B: Human-in-the-Loop Feedback ---
             elif action in ["approve", "revise"]:
                 feedback = payload.get("feedback", "")
                 
-                try:
-                    if action == "revise":
-                        # Inject user feedback into the state
-                        agent_app.update_state(config, {"human_feedback": feedback}, as_node="human_review")
-                    elif action == "approve":
-                        # Approve and move forward
-                        agent_app.update_state(config, {"human_feedback": "APPROVED"}, as_node="human_review")
-                    
-                    # Resume the graph by passing None as the input
-                    async for event in agent_app.astream_events(None, config=config, version="v2"):
-                        kind = event["event"]
-                        name = event["name"]
-                        
-                        if kind == "on_chain_start" and name in ["supervisor", "researcher", "planner", "archiver"]:
-                            await websocket.send_json({"type": "status", "agent": name, "message": f"⚡ {name.upper()} is executing..."})
-                    
-                    # Check final state after resumption
-                    final_state = agent_app.get_state(config)
-                    if not final_state.next: 
-                        await websocket.send_json({
-                            "type": "run_complete",
-                            "tasks": final_state.values.get("tasks", [])
-                        })
-                    elif final_state.next[0] == "human_review":
-                        await websocket.send_json({
-                            "type": "waiting_for_user",
-                            "tasks": final_state.values.get("tasks", [])
-                        })
-                        
-                except Exception as ai_error:
-                    # If the AI crashes (e.g., bad JSON), send the error to the frontend Trace Log!
-                    print(f"AI Execution Error: {ai_error}")
+                if action == "revise":
+                    await agent_app.aupdate_state(config, {"human_feedback": feedback}, as_node="human_review")
+                elif action == "approve":
+                    await agent_app.aupdate_state(config, {"human_feedback": "APPROVED"}, as_node="human_review")
+                
+                async for event in agent_app.astream_events(None, config=config, version="v2"):
+                    kind = event["event"]
+                    name = event["name"]
+                    if kind == "on_chain_start" and name in ["supervisor", "memory_retriever", "researcher", "planner", "archiver"]:
+                        await websocket.send_json({"type": "status", "agent": name, "message": f"{name} is resuming..."})
+                
+                final_state = await agent_app.aget_state(config)
+                if not final_state.next: 
                     await websocket.send_json({
-                        "type": "error",
-                        "message": f"Agent Error: {str(ai_error)}"
+                        "type": "run_complete",
+                        "tasks": final_state.values.get("tasks", [])
                     })
+                elif final_state.next[0] == "human_review":
+                    await websocket.send_json({
+                        "type": "waiting_for_user",
+                        "tasks": final_state.values.get("tasks", [])
+                    })
+
     except WebSocketDisconnect:
         print(f"Client {thread_id} disconnected.")
     except Exception as e:
         await websocket.send_json({"type": "error", "message": str(e)})
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # Uses dynamic port for Railway deployment, 8000 locally
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)

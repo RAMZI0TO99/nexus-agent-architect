@@ -9,17 +9,10 @@ class Task(TypedDict):
     assigned_role: str
 
 class ProjectState(TypedDict):
-    # Tracks the conversation history and agent outputs
     messages: Annotated[list, add_messages]
-    
-    # User Input
     project_goal: str
-    
-    # Agent Outputs
-    research_notes: Annotated[list, operator.add] # Appends items instead of overwriting
+    research_notes: Annotated[list, operator.add] 
     tasks: List[Task]
     draft_plan: Optional[str]
-    
-    # Control Flow variables
     next_node: str 
     human_feedback: Optional[str]

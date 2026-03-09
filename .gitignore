@@ -1,3 +1,10 @@
+# Python
 venv/
-.env
 __pycache__/
+*.pyc
+.env
+
+# Node
+node_modules/
+.next/
+out/
