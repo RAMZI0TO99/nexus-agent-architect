@@ -1,0 +1,31 @@
+{
+  "name": "agentic-pm-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@clerk/nextjs": "^7.0.8",
+    "@tailwindcss/postcss": "^4.2.2",
+    "clsx": "latest",
+    "lucide-react": "^1.7.0",
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "tailwind-merge": "latest",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "autoprefixer": "latest",
+    "postcss": "^8.5.8",
+    "tailwindcss": "latest",
+    "typescript": "latest"
+  }
+}

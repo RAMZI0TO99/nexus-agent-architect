@@ -3,45 +3,36 @@ import { create } from 'zustand';
 export interface Task {
   id: string;
   title: string;
-  description: string;
-  assigned_role: string;
-}
-
-export interface Log {
-  type: 'status' | 'tool' | 'token';
-  content: string;
+  status: 'todo' | 'in_progress' | 'done';
 }
 
 interface AgentState {
-  isConnected: boolean;
-  isWaitingForUser: boolean;
-  isProcessing: boolean; 
-  generationCount: number; 
-  logs: Log[];
   tasks: Task[];
+  logs: string[];
+  isConnected: boolean;
+  quotaUsed: number;
+  quotaMax: number;
+  // --- NEW: The AI Pause State ---
+  isWaitingForApproval: boolean;
   
-  setConnected: (status: boolean) => void;
-  setWaiting: (status: boolean) => void;
-  setProcessing: (status: boolean) => void; 
-  incrementGeneration: () => void; 
-  addLog: (log: Log) => void;
   setTasks: (tasks: Task[]) => void;
-  clearState: () => void;
+  addLog: (log: string) => void;
+  setConnected: (status: boolean) => void;
+  setQuota: (used: number, max: number) => void;
+  setWaitingForApproval: (status: boolean) => void;
 }
 
 export const useAgentStore = create<AgentState>((set) => ({
-  isConnected: false,
-  isWaitingForUser: false,
-  isProcessing: false,
-  generationCount: 0,
-  logs: [],
   tasks: [],
+  logs: [],
+  isConnected: false,
+  quotaUsed: 0,
+  quotaMax: 3,
+  isWaitingForApproval: false,
   
-  setConnected: (status) => set({ isConnected: status }),
-  setWaiting: (status) => set({ isWaitingForUser: status }),
-  setProcessing: (status) => set({ isProcessing: status }),
-  incrementGeneration: () => set((state) => ({ generationCount: state.generationCount + 1 })),
-  addLog: (log) => set((state) => ({ logs: [...state.logs, log] })),
   setTasks: (tasks) => set({ tasks }),
-  clearState: () => set({ logs: [], tasks: [], isWaitingForUser: false, isProcessing: false })
+  addLog: (log) => set((state) => ({ logs: [...state.logs, log] })),
+  setConnected: (status) => set({ isConnected: status }),
+  setQuota: (used, max) => set({ quotaUsed: used, quotaMax: max }),
+  setWaitingForApproval: (status) => set({ isWaitingForApproval: status }),
 }));

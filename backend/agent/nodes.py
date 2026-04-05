@@ -71,28 +71,39 @@ def researcher_node(state: ProjectState) -> Dict[str, Any]:
         "messages": [AIMessage(content=f"Researched the web for: {goal}", name="Researcher")]
     }
 
+
 def planner_node(state: ProjectState) -> Dict[str, Any]:
     goal = state.get("project_goal", "")
     research = state.get("research_notes", ["No research."])[-1] 
-    feedback = state.get("human_feedback") # It successfully reads the feedback here
+    feedback = state.get("human_feedback")
 
-    sys_msg = "You are an elite Lead Software Engineer. Break the user's project into 4 highly actionable tasks."
+    # --- THE AGGRESSIVE FIX ---
+    sys_msg = (
+        "You are an elite Principal Systems Architect. Your goal is to provide a granular, "
+        "low-level implementation plan. \n\n"
+        "STEPS TO FOLLOW:\n"
+        "1. Identify every unique architectural component (Database, Auth, Cache, Message Broker, UI, DevOps).\n"
+        "2. For EACH component, generate 2-4 granular, technical tasks.\n"
+        "3. Ensure complex projects (High Availability, Microservices) result in 15-25+ tasks.\n"
+        "4. Avoid vague tasks like 'Implement Redis'. Instead use 'Configure Redis Master-Slave Replication and Cache Eviction Policy'.\n"
+        "5. If a task is too big to be finished in one day, BREAK IT DOWN."
+    )
+    
     if feedback:
-        sys_msg += f"\n\nCRITICAL: The user rejected your previous plan. Feedback: '{feedback}'. Adjust tasks to satisfy this!"
+        sys_msg += f"\n\nCRITICAL REVISION: The user provided feedback: '{feedback}'. You must pivot the entire architecture to address this."
 
-    prompt = f"Project Goal: {goal}\n\nTechnical Context: {research}"
+    # Use a higher temperature (0.7) for the planner if possible to encourage more detail
     structured_llm = llm.with_structured_output(PlanSchema)
     
     result = structured_llm.invoke([
         SystemMessage(content=sys_msg),
-        HumanMessage(content=prompt)
+        HumanMessage(content=f"Project: {goal}\nContext: {research}")
     ])
 
-    task_dicts = [task.model_dump() for task in result.tasks]
     return {
-        "tasks": task_dicts,
-        "human_feedback": None, # FIX: Delete the feedback HERE after we use it, preventing infinite loops!
-        "messages": [AIMessage(content="Drafted structured project tasks.", name="Planner")]
+        "tasks": [t.model_dump() for t in result.tasks],
+        "human_feedback": None,
+        "messages": [AIMessage(content=f"Decomposed project into {len(result.tasks)} granular tasks.", name="Planner")]
     }
 
 def human_review_node(state: ProjectState) -> Dict[str, Any]:
